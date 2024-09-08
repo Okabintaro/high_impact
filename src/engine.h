@@ -130,4 +130,7 @@ void engine_cleanup(void);
 void engine_resize(vec2i_t size);
 
 
+// Load a level from tiled tmj format
+void engine_load_level_tiled(char *json_path, char *project_path);
+
 #endif
