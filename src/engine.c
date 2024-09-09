@@ -8,6 +8,8 @@
 #include "utils.h"
 #include "image.h"
 #include "sound.h"
+#include <stdio.h>
+#include <string.h>
 
 engine_t engine = {
     .time_real = 0,
@@ -64,7 +66,7 @@ typedef struct {
 	uint16_t tile_height;
 	char *image_path;
 	char *tsj_path;
-	json_t* json;
+	json_t *json;
 } tiled_tileset_t;
 
 #define MAX_TILESETS 8
@@ -74,11 +76,11 @@ typedef struct {
 	tiled_tileset_t tilesets[MAX_TILESETS];
 } tiled_map_info_t;
 
-static char* parent_dir(const char* path) {
+static char *parent_dir(const char *path) {
 	const size_t path_len = strlen(path);
-	char* pdir = bump_alloc(path_len);
+	char *pdir = bump_alloc(path_len);
 	strncpy(pdir, path, path_len);
-	char* last_slash = strrchr(pdir, '/');
+	char *last_slash = strrchr(pdir, '/');
 	if (last_slash) {
 		*last_slash = '\0';
 		return pdir;
@@ -88,15 +90,15 @@ static char* parent_dir(const char* path) {
 }
 
 
-static char* norm_path(const char* path) {
+static char *norm_path(const char *path) {
 	size_t path_len = strlen(path);
-	char* path_dup = bump_alloc(path_len + 1);
-	char* ret = strncpy(path_dup, path, path_len+1);
-	#define MAX_PARTS 32
-	char* parts[MAX_PARTS] = {0};
+	char *path_dup = bump_alloc(path_len + 1);
+	char *ret = strncpy(path_dup, path, path_len + 1);
+#define MAX_PARTS 32
+	char *parts[MAX_PARTS] = {0};
 	int parts_len = 0;
 
-	char* token = strtok(path_dup, "/");
+	char *token = strtok(path_dup, "/");
 	for (int i = 0; i < strlen(path); i++) {
 		if (token == NULL) {
 			break;
@@ -108,44 +110,41 @@ static char* norm_path(const char* path) {
 		token = strtok(NULL, "/");
 	}
 
-    for(int i = 0; i < parts_len; i++) {
+	for (int i = 0; i < parts_len; i++) {
 		if (str_equals(parts[i], "..")) {
 			if (i - 1 < 0) {
 				die("Can't resolve parent/upper dir");
 			}
 
 			parts[i] = NULL;
-			for (int j = i-1; j > 0; j--) {
+			for (int j = i - 1; j > 0; j--) {
 				if (parts[j] != NULL) {
 					parts[j] = NULL;
 					break;
 				}
-
 			}
 		}
-    }
+	}
 
-	char* new_path = bump_alloc(path_len);
+	char *new_path = bump_alloc(path_len);
 	memset(new_path, 0, path_len);
-    for(int i = 0; i < parts_len; i++) {
+	for (int i = 0; i < parts_len; i++) {
 		if (parts[i]) {
 			strcat(new_path, parts[i]);
-			if (i < parts_len-1) {
+			if (i < parts_len - 1) {
 				strcat(new_path, "/");
 			}
 		}
-    }
+	}
 	return new_path;
 }
-
-
 
 
 map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 	error_if(engine_is_running(), "Cannot create map during gameplay");
 
 	char *layer_name = json_string(json_value_for_key(def, "name"));
-	char* type = json_string(json_value_for_key(def, "type"));
+	char *type = json_string(json_value_for_key(def, "type"));
 	if (!str_equals(type, "tilelayer")) {
 		fprintf(stderr, "layer %s is not a tilelayer\n", layer_name);
 		return NULL;
@@ -213,8 +212,7 @@ map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 		} else if (tile > 0 && tile > max_tile) {
 			max_tile = tile;
 		}
-
-	}	
+	}
 	if (max_tile == 0) {
 		fprintf(stderr, "warning: map layer %s has no actual data(every tile is 0)\n", map->name);
 		return map;
@@ -244,10 +242,10 @@ map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 	const size_t MAX_PATHLEN = 256;
 	char *resolved_image_path = bump_alloc(MAX_PATHLEN);
 	// TODO: Double check and test on windows too
-	char* tsj_folder = parent_dir(matched_tileset.tsj_path);
+	char *tsj_folder = parent_dir(matched_tileset.tsj_path);
 	int result = snprintf(resolved_image_path, MAX_PATHLEN, "%s/%s", tsj_folder, tileset_image_path);
 	error_if(result < 0 || result >= MAX_PATHLEN, "path is too long or short!");
-	char* new_resolved_path = norm_path(resolved_image_path);
+	char *new_resolved_path = norm_path(resolved_image_path);
 	char *png_pos = strstr(new_resolved_path, ".png");
 	strcpy(png_pos, ".qoi");
 
@@ -257,11 +255,66 @@ map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 	uint16_t firstgid = info->tilesets[matched_tileset_idx].first_gid;
 	for (int i = 0; i < map->size.x * map->size.y; i++) {
 		if (map->data[i] > 0) {
-			map->data[i] -= firstgid-1;
+			map->data[i] -= firstgid - 1;
 		}
 	}
 
 	return map;
+}
+
+void entities_from_tiled_layer_json(json_t *layer_json) {
+	json_t *objects = json_value_for_key(layer_json, "objects");
+	error_if(!objects, "No objects in layer");
+
+	// Remember all entities with settings; we want to apply these settings
+	// only after all entities have been spawned.
+	// FIXME: we do this on the stack. Should maybe use the temp alloc instead.
+	struct {
+		entity_t *entity;
+		json_t *settings;
+	} entity_settings[objects->len];
+	int entity_settings_len = 0;
+
+	for (int i = 0; objects && i < objects->len; i++) {
+		json_t *obj = json_value_at(objects, i);
+
+		char *type_name = json_string(json_value_for_key(obj, "type"));
+		error_if(!type_name, "Entity has no type");
+		entity_type_t type = entity_type_by_name(type_name);
+		error_if(!type, "Unknown entity type %s", type_name);
+
+		float height = json_number(json_value_for_key(obj, "height"));
+		vec2_t pos = {
+			// Tiled object origins are on bottom left, instead of top left
+		    json_number(json_value_for_key(obj, "x")),
+		    json_number(json_value_for_key(obj, "y")) - height,
+		};
+		entity_t *ent = entity_spawn(type, pos);
+
+		// Use id as a name, since it gets used by references too
+		json_t *id_v = json_value_for_key(obj, "id");
+		error_if(!id_v, "Expected id") int id = (int)id_v->number;
+		error_if(id < 0 || id >= UINT16_MAX, "id out of range");
+		ent->name = bump_alloc(16);
+		snprintf(ent->name, 15, "%d", id);
+
+// Map properties to settings
+// TODO Figure out how to build the object/dict
+#if 0
+		json_t *props = json_value_for_key(obj, "properties");
+		json_t *settings = bump_alloc(sizeof(json_t) * props->len);
+		char **keys = bump_alloc(sizeof(char*) * props->len);
+		if (ent && props && props->type == JSON_ARRAY) {
+			for (int i = 0; props && i < props->len; i++) {
+				json_t *prop = json_value_at(props, i);
+
+				entity_settings[entity_settings_len].entity = ent;
+				entity_settings[entity_settings_len].settings = settings;
+				entity_settings_len++;
+			}
+		}
+#endif
+	}
 }
 
 void engine_load_level_tiled(char *json_path, char *project_dir) {
@@ -305,11 +358,11 @@ void engine_load_level_tiled(char *json_path, char *project_dir) {
 		info.tilesets[i] = (tiled_tileset_t){
 		    .first_gid = firstgid,
 		    .tile_count = tile_count,
-			.tile_width = ts_tile_width,
-			.tile_height = ts_tile_height,
-			.image_path = image,
-			.tsj_path = tsj_path,
-			.json = tileset_json,
+		    .tile_width = ts_tile_width,
+		    .tile_height = ts_tile_height,
+		    .image_path = image,
+		    .tsj_path = tsj_path,
+		    .json = tileset_json,
 		};
 		info.tilesets_len++;
 	}
@@ -319,25 +372,30 @@ void engine_load_level_tiled(char *json_path, char *project_dir) {
 	for (int i = 0; layers && i < layers->len; i++) {
 		json_t *layer = json_value_at(layers, i);
 		char *name = json_string(json_value_for_key(layer, "name"));
+		char *type = json_string(json_value_for_key(layer, "type"));
+		error_if(!name || !type, "layer has no name or type");
 
-		map_t *map = map_from_tiled_layer_json(layer, &info);
-		if (map == NULL) {
-			continue;
-		}
-
-		if (str_equals(name, "collision")) {
-			engine_set_collision_map(map);
-		} else {
-			engine_add_background_map(map);
+		if (str_equals(type, "tilelayer")) {
+			map_t *map = map_from_tiled_layer_json(layer, &info);
+			if (map == NULL) {
+				continue;
+			}
+			if (str_equals(name, "collision")) {
+				engine_set_collision_map(map);
+			} else {
+				engine_add_background_map(map);
+			}
+		} else if (str_equals(type, "objectgroup")) {
+			entities_from_tiled_layer_json(layer);
+			// TODO: Load entities
 		}
 	}
 
+	// Free loaded json stuff
 	for (int i = 0; i < info.tilesets_len; i++) {
 		temp_free(info.tilesets[i].json);
 	}
 	temp_free(map_json);
-
-	// TODO: Load entities
 }
 
 
