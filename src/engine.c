@@ -207,11 +207,13 @@ map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 		error_if((uint64_t)raw_tile < 0 || (uint64_t)raw_tile > 0xFFFF, "tile is out of range");
 		uint16_t tile = raw_tile;
 		map->data[index++] = tile;
-		if (tile < min_tile) {
+
+		if (tile > 0 && tile < min_tile) {
 			min_tile = tile;
-		} else if (tile > max_tile) {
+		} else if (tile > 0 && tile > max_tile) {
 			max_tile = tile;
 		}
+
 	}	
 	if (max_tile == 0) {
 		fprintf(stderr, "warning: map layer %s has no actual data(every tile is 0)\n", map->name);
@@ -221,7 +223,8 @@ map_t *map_from_tiled_layer_json(json_t *def, tiled_map_info_t *info) {
 	// TODO: Try to figure out which tileset got used by data
 	int matched_tileset_idx = -1;
 	for (int i = 0; i < info->tilesets_len; i++) {
-		if (min_tile <= info->tilesets[i].first_gid) {
+		tiled_tileset_t ts = info->tilesets[i];
+		if (min_tile >= ts.first_gid && max_tile <= ts.first_gid + ts.tile_count) {
 			matched_tileset_idx = i;
 			break;
 		}
@@ -323,7 +326,7 @@ void engine_load_level_tiled(char *json_path, char *project_dir) {
 		}
 
 		if (str_equals(name, "collision")) {
-			// engine_set_collision_map(map);
+			engine_set_collision_map(map);
 		} else {
 			engine_add_background_map(map);
 		}
